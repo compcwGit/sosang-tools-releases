@@ -1,0 +1,55 @@
+# 설치 파일 게시: 비공개 빌드 저장소의 Release 첨부 파일(짧게 유효한 서명 URL)을 받아 이 공개 저장소의 Release 로 올린다.
+# 자동 업데이트(electron-updater)는 이 저장소의 최신 Release 의 latest.yml 을 본다.
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 버전 태그 (예 v0.6.0)
+        required: true
+      exe_url:
+        description: 설치 파일 다운로드 URL
+        required: true
+      blockmap_url:
+        description: blockmap 다운로드 URL
+        required: true
+      yml_url:
+        description: latest.yml 다운로드 URL
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 파일 받기·검증
+        env:
+          TAG: ${{ inputs.tag }}
+          EXE_URL: ${{ inputs.exe_url }}
+          MAP_URL: ${{ inputs.blockmap_url }}
+          YML_URL: ${{ inputs.yml_url }}
+        run: |
+          set -e
+          V="${TAG#v}"
+          mkdir out && cd out
+          curl -fsSL "$YML_URL" -o latest.yml
+          grep -q "^version: $V$" latest.yml || { echo "::error::latest.yml 버전이 $V 가 아닙니다"; exit 1; }
+          EXE=$(grep '^path:' latest.yml | awk '{print $2}')
+          curl -fsSL "$EXE_URL" -o "$EXE"
+          curl -fsSL "$MAP_URL" -o "$EXE.blockmap"
+          WANT=$(grep '^sha512:' latest.yml | awk '{print $2}')
+          GOT=$(openssl dgst -sha512 -binary "$EXE" | base64 -w0)
+          [ "$WANT" = "$GOT" ] || { echo "::error::설치 파일 체크섬 불일치"; exit 1; }
+          zip -q -1 "${EXE%.exe}.zip" "$EXE"
+          ls -la
+      - name: Release 만들기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          NOTES="notes/$TAG.md"; [ -f "$NOTES" ] || NOTES=/dev/null
+          gh release create "$TAG" out/* -R "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$NOTES" --target main --latest
